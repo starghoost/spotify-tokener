@@ -81,11 +81,21 @@ TOKENER_PORT = int(os.environ.get("TOKENER_INTERNAL_PORT", "8082"))
 PROXY_PORT = int(os.environ.get("TOKENER_PORT", "8081"))
 CACHE_SECS = int(os.environ.get("TOKEN_CACHE_SECS", "3300"))
 FETCH_TIMEOUT = int(os.environ.get("TOKEN_FETCH_TIMEOUT", "120"))
+EXPIRY_SKEW_SECS = int(os.environ.get("TOKEN_EXPIRY_SKEW_SECS", "60"))
 
 _cache_data = None
 _cache_expires = 0.0
 _cache_lock = threading.Lock()
 _fetch_lock = threading.Lock()
+
+def _compute_cache_ttl_seconds(payload):
+    expires_at_ms = int(payload.get("accessTokenExpirationTimestampMs") or 0)
+    if expires_at_ms <= 0:
+        return max(30, CACHE_SECS)
+
+    remaining_secs = max(0, (expires_at_ms - int(time.time() * 1000)) / 1000)
+    ttl_secs = max(0, remaining_secs - EXPIRY_SKEW_SECS)
+    return max(0, min(CACHE_SECS, int(ttl_secs)))
 
 def _fetch():
     global _cache_data, _cache_expires
@@ -94,10 +104,12 @@ def _fetch():
     try:
         with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT) as resp:
             data = resp.read()
+        payload = json.loads(data.decode("utf-8"))
+        ttl_secs = _compute_cache_ttl_seconds(payload)
         with _cache_lock:
             _cache_data = data
-            _cache_expires = time.monotonic() + CACHE_SECS
-        print(f"[proxy] Token cacheado OK. Expira en {CACHE_SECS}s.", flush=True)
+            _cache_expires = time.monotonic() + ttl_secs
+        print(f"[proxy] Token cacheado OK. TTL efectivo {ttl_secs}s.", flush=True)
         return True
     except Exception as e:
         print(f"[proxy] Error obteniendo token: {e}", flush=True)
@@ -147,7 +159,19 @@ class TokenHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if expired:
-            ensure_background_refresh()
+            with _fetch_lock:
+                _fetch()
+            with _cache_lock:
+                data = _cache_data
+                expired = time.monotonic() >= _cache_expires
+            if data is None or expired:
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                body = json.dumps({"error": "token_expired"}).encode("utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

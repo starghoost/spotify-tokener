@@ -73,6 +73,7 @@ RUN cat > /usr/local/bin/token-proxy.py <<'PYEOF' && chmod +x /usr/local/bin/tok
 import http.server
 import json
 import os
+import socket
 import threading
 import time
 import urllib.request
@@ -82,11 +83,14 @@ PROXY_PORT = int(os.environ.get("TOKENER_PORT", "8081"))
 CACHE_SECS = int(os.environ.get("TOKEN_CACHE_SECS", "3300"))
 FETCH_TIMEOUT = int(os.environ.get("TOKEN_FETCH_TIMEOUT", "120"))
 EXPIRY_SKEW_SECS = int(os.environ.get("TOKEN_EXPIRY_SKEW_SECS", "60"))
+UNHEALTHY_AFTER_FAILURES = int(os.environ.get("TOKEN_UNHEALTHY_AFTER_FAILURES", "3"))
 
 _cache_data = None
 _cache_expires = 0.0
 _cache_lock = threading.Lock()
 _fetch_lock = threading.Lock()
+_last_success_at = 0.0
+_consecutive_failures = 0
 
 def _compute_cache_ttl_seconds(payload):
     expires_at_ms = int(payload.get("accessTokenExpirationTimestampMs") or 0)
@@ -98,7 +102,7 @@ def _compute_cache_ttl_seconds(payload):
     return max(0, min(CACHE_SECS, int(ttl_secs)))
 
 def _fetch():
-    global _cache_data, _cache_expires
+    global _cache_data, _cache_expires, _last_success_at, _consecutive_failures
     url = f"http://127.0.0.1:{TOKENER_PORT}/api/token"
     print(f"[proxy] Obteniendo token de {url}...", flush=True)
     try:
@@ -109,9 +113,13 @@ def _fetch():
         with _cache_lock:
             _cache_data = data
             _cache_expires = time.monotonic() + ttl_secs
+            _last_success_at = time.monotonic()
+            _consecutive_failures = 0
         print(f"[proxy] Token cacheado OK. TTL efectivo {ttl_secs}s.", flush=True)
         return True
     except Exception as e:
+        with _cache_lock:
+            _consecutive_failures += 1
         print(f"[proxy] Error obteniendo token: {e}", flush=True)
         return False
 
@@ -139,6 +147,28 @@ def background_refresh_loop():
 
 class TokenHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/healthz":
+            with _cache_lock:
+                expired = time.monotonic() >= _cache_expires
+                has_cache = _cache_data is not None
+                failures = _consecutive_failures
+            healthy = has_cache and (not expired or failures < UNHEALTHY_AFTER_FAILURES)
+            self.send_response(200 if healthy else 503)
+            self.send_header("Content-Type", "application/json")
+            body = json.dumps({
+                "healthy": healthy,
+                "hasCache": has_cache,
+                "expired": expired,
+                "consecutiveFailures": failures
+            }).encode("utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
         if self.path != "/api/token":
             self.send_response(404)
             self.end_headers()
@@ -155,7 +185,10 @@ class TokenHandler(http.server.BaseHTTPRequestHandler):
             body = json.dumps({"error": "token_not_ready"}).encode("utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         if expired:
@@ -170,14 +203,20 @@ class TokenHandler(http.server.BaseHTTPRequestHandler):
                 body = json.dumps({"error": "token_expired"}).encode("utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, fmt, *args):
         pass
@@ -186,7 +225,7 @@ print(f"[proxy] Iniciando. Tokener en :{TOKENER_PORT}, proxy en :{PROXY_PORT}", 
 ensure_background_refresh()
 threading.Thread(target=background_refresh_loop, daemon=True).start()
 print(f"[proxy] Proxy listo. Respondiendo en :{PROXY_PORT}", flush=True)
-httpd = http.server.HTTPServer(("0.0.0.0", PROXY_PORT), TokenHandler)
+httpd = http.server.ThreadingHTTPServer(("0.0.0.0", PROXY_PORT), TokenHandler)
 httpd.serve_forever()
 PYEOF
 
@@ -218,6 +257,7 @@ PROXY_PID=$!
 
 echo "[entrypoint] Sistema listo. Tokener PID=${TOKENER_PID}, Proxy PID=${PROXY_PID}"
 
+PROXY_HEALTH_FAILS=0
 while true; do
   if ! kill -0 "$TOKENER_PID" 2>/dev/null; then
     echo "[entrypoint] El tokener terminó. Cerrando contenedor."
@@ -229,7 +269,25 @@ while true; do
     wait "$PROXY_PID"
     exit 1
   fi
-  sleep 2
+  if curl -fsS -o /dev/null "http://127.0.0.1:${TOKENER_INTERNAL_PORT}/" --max-time 5 --connect-timeout 2 2>/dev/null; then
+    :
+  else
+    echo "[entrypoint] El tokener interno dejó de responder. Cerrando contenedor."
+    exit 1
+  fi
+
+  if curl -fsS -o /dev/null "http://127.0.0.1:${TOKENER_PORT}/healthz" --max-time 5 --connect-timeout 2 2>/dev/null; then
+    PROXY_HEALTH_FAILS=0
+  else
+    PROXY_HEALTH_FAILS=$((PROXY_HEALTH_FAILS + 1))
+    echo "[entrypoint] Healthcheck del proxy/tokener falló (${PROXY_HEALTH_FAILS})."
+    if [ "$PROXY_HEALTH_FAILS" -ge 3 ]; then
+      echo "[entrypoint] El proxy/tokener quedó inutilizable. Cerrando contenedor para reinicio."
+      exit 1
+    fi
+  fi
+
+  sleep 10
 done
 ENTRYSH
 

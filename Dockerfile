@@ -73,7 +73,6 @@ RUN cat > /usr/local/bin/token-proxy.py <<'PYEOF' && chmod +x /usr/local/bin/tok
 import http.server
 import json
 import os
-import socket
 import threading
 import time
 import urllib.request
@@ -269,7 +268,7 @@ while true; do
     wait "$PROXY_PID"
     exit 1
   fi
-  if curl -fsS -o /dev/null "http://127.0.0.1:${TOKENER_INTERNAL_PORT}/" --max-time 5 --connect-timeout 2 2>/dev/null; then
+  if curl -s -o /dev/null "http://127.0.0.1:${TOKENER_INTERNAL_PORT}/" --max-time 5 --connect-timeout 2 2>/dev/null; then
     :
   else
     echo "[entrypoint] El tokener interno dejó de responder. Cerrando contenedor."

@@ -234,6 +234,7 @@ set -eu
 
 TOKENER_INTERNAL_PORT="${TOKENER_INTERNAL_PORT:-8082}"
 TOKENER_PORT="${TOKENER_PORT:-8081}"
+TOKEN_STARTUP_GRACE_SECS="${TOKEN_STARTUP_GRACE_SECS:-45}"
 export TOKENER_INTERNAL_PORT TOKENER_PORT
 
 echo "[entrypoint] Arrancando tokener en background (puerto interno ${TOKENER_INTERNAL_PORT})..."
@@ -257,6 +258,7 @@ PROXY_PID=$!
 echo "[entrypoint] Sistema listo. Tokener PID=${TOKENER_PID}, Proxy PID=${PROXY_PID}"
 
 PROXY_HEALTH_FAILS=0
+STARTED_AT="$(date +%s)"
 while true; do
   if ! kill -0 "$TOKENER_PID" 2>/dev/null; then
     echo "[entrypoint] El tokener terminó. Cerrando contenedor."
@@ -273,6 +275,13 @@ while true; do
   else
     echo "[entrypoint] El tokener interno dejó de responder. Cerrando contenedor."
     exit 1
+  fi
+
+  NOW_TS="$(date +%s)"
+  ELAPSED="$((NOW_TS - STARTED_AT))"
+  if [ "$ELAPSED" -lt "$TOKEN_STARTUP_GRACE_SECS" ]; then
+    sleep 10
+    continue
   fi
 
   if curl -fsS -o /dev/null "http://127.0.0.1:${TOKENER_PORT}/healthz" --max-time 5 --connect-timeout 2 2>/dev/null; then

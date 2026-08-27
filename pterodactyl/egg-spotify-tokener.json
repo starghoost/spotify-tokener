@@ -1,0 +1,112 @@
+{
+  "_comment": "DO NOT EDIT: FILE GENERATED FOR PTERODACTYL PANEL IMPORT",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": "https://raw.githubusercontent.com/starghoost/spotify-tokener/main/pterodactyl/egg-spotify-tokener.json"
+  },
+  "exported_at": "2026-08-27T00:00:00-05:00",
+  "name": "Odyssey Spotify Tokener",
+  "author": "starghoost@users.noreply.github.com",
+  "description": "Servicio spotify-tokener endurecido para LavaSrc: Chromium incluido, cache con expiracion, healthchecks, reinicio supervisado y puerto administrado por Pterodactyl.",
+  "features": [],
+  "docker_images": {
+    "ghcr.io/starghoost/spotify-tokener:latest": "ghcr.io/starghoost/spotify-tokener:latest"
+  },
+  "file_denylist": [],
+  "startup": "/usr/local/bin/spotify-tokener",
+  "config": {
+    "files": "{}",
+    "startup": "{\n  \"done\": \"SPOTIFY_TOKEN_PROXY_READY\"\n}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\nset -euo pipefail\nmkdir -p /mnt/server\necho 'La imagen contiene todos los binarios; no se requieren archivos persistentes.'\n",
+      "container": "ghcr.io/parkervcp/installers:debian",
+      "entrypoint": "/bin/bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Nivel de log",
+      "description": "Nivel del spotify-tokener upstream. INFO evita ruido sin ocultar fallos.",
+      "env_variable": "SPOTIFY_TOKENER_LOG_LEVEL",
+      "default_value": "INFO",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:TRACE,DEBUG,INFO,WARN,ERROR",
+      "field_type": "text"
+    },
+    {
+      "name": "Ruta segura de Chromium",
+      "description": "Wrapper incluido en la imagen. No necesita modificarse desde el panel.",
+      "env_variable": "SPOTIFY_TOKENER_CHROME_PATH",
+      "default_value": "/usr/local/bin/chrome-no-sandbox",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string|max:255",
+      "field_type": "text"
+    },
+    {
+      "name": "Puerto interno",
+      "description": "Puerto loopback del binario upstream; el proxy publico utiliza la asignacion principal del servidor.",
+      "env_variable": "TOKENER_INTERNAL_PORT",
+      "default_value": "8082",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|integer|min:1024|max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Cache maxima",
+      "description": "Segundos maximos de cache. La expiracion real de Spotify siempre tiene prioridad.",
+      "env_variable": "TOKEN_CACHE_SECS",
+      "default_value": "3300",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:300|max:21600",
+      "field_type": "text"
+    },
+    {
+      "name": "Margen de expiracion",
+      "description": "Segundos retirados a la expiracion para no entregar tokens a punto de vencer.",
+      "env_variable": "TOKEN_EXPIRY_SKEW_SECS",
+      "default_value": "120",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:15|max:1800",
+      "field_type": "text"
+    },
+    {
+      "name": "Timeout de Spotify",
+      "description": "Tiempo maximo de una obtencion mediante Chromium.",
+      "env_variable": "TOKEN_FETCH_TIMEOUT",
+      "default_value": "120",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:5|max:600",
+      "field_type": "text"
+    },
+    {
+      "name": "Ventana de arranque",
+      "description": "Tiempo maximo para obtener el primer token antes de solicitar un reinicio limpio.",
+      "env_variable": "TOKEN_STARTUP_GRACE_SECS",
+      "default_value": "180",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:30|max:900",
+      "field_type": "text"
+    },
+    {
+      "name": "Fallos antes de reiniciar",
+      "description": "Healthchecks consecutivos fallidos antes de terminar para que Wings reinicie el servicio.",
+      "env_variable": "TOKEN_UNHEALTHY_AFTER_FAILURES",
+      "default_value": "3",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:10",
+      "field_type": "text"
+    }
+  ]
+}

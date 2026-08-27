@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+for candidate in /usr/bin/chromium /usr/bin/chromium-browser; do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" \
+      --no-sandbox \
+      --disable-setuid-sandbox \
+      --disable-dev-shm-usage \
+      --disable-gpu \
+      "$@"
+  fi
+done
+
+echo "ERROR: Chromium no esta instalado en la imagen." >&2
+exit 127

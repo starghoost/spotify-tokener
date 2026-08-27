@@ -7,6 +7,7 @@ import http.server
 import json
 import os
 import signal
+import sys
 import threading
 import time
 import urllib.error
@@ -167,6 +168,15 @@ def refresh_loop() -> None:
 class TokenHTTPServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 128
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        error = sys.exc_info()[1]
+        # Wings/Docker pueden comprobar el puerto con una conexion TCP que se
+        # cierra sin enviar HTTP. Es una sonda valida, no un fallo del servicio.
+        if isinstance(error, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class TokenHandler(http.server.BaseHTTPRequestHandler):

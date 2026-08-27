@@ -10,8 +10,12 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOBIN=/out \
-    go install "github.com/topi314/spotify-tokener@${SPOTIFY_TOKENER_REF}"
+    mkdir -p /out \
+    && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+       go install "github.com/topi314/spotify-tokener@${SPOTIFY_TOKENER_REF}" \
+    && find /go/bin -type f -name spotify-tokener \
+       -exec cp {} /out/spotify-tokener \; \
+    && test -x /out/spotify-tokener
 
 FROM debian:bookworm-slim
 
